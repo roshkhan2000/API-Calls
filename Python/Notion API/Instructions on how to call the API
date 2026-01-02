@@ -1,0 +1,8 @@
+There are 2 values that will change in the provided script file:
+  *insert database ID*
+  *insert API Key*
+
+To understand these better, I would recommend reading my blog on the same API call I made in Alteryx. 
+I would recommend reading from 'Overview' to 'Convert databse's URL into an APi-friendly URL'.
+
+Blog: https://www.thedataschool.co.uk/rosh-khan/using-notion-api-with-alteryx/
