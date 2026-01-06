@@ -1,0 +1,25 @@
+import requests
+import pandas as pd
+
+url = "https://api.service.cqc.org.uk/public/v1/changes/location"
+
+headers = {
+    "Ocp-Apim-Subscription-Key": "insert_key"
+}
+
+params = {
+    "startTimestamp": "2015-01-01",
+    "endTimestamp": "2015-02-01",
+    "page": 1,
+    "perPage": 10
+}
+
+response = requests.get(url, headers=headers, params=params)
+
+# response.raise_for_status()
+
+json_data = response.json()
+
+df = pd.json_normalize(json_data, record_path=["changes"])
+
+df.to_csv(r"G:\My Drive\03 Personal Projects\Python\CQC API")
