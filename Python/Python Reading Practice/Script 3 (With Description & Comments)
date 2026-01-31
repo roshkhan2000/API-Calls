@@ -51,7 +51,7 @@ s3 = boto3.client(
   # create folder paths and file names to read
 # call each file_key and get a response
 # response is then then uncompressed in memory and converted from bytes to string
-# idk whats happening in the line part but does it append each line and converts json string to python object
+# split strings into seperate lines, convert json strings to python dictioanry and append all dictionaries into a list
 # print a particular message when no data is found
 records = []
 
