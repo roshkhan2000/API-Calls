@@ -1,0 +1,87 @@
+import os
+import json
+from datetime import datetime, timedelta
+from io import StringIO
+
+import boto3
+import pandas as pd
+from dotenv import load_dotenv
+
+load_dotenv()
+
+AWS_KEY = os.getenv("AWS_ACCESS_KEY")
+AWS_SECRET = os.getenv("AWS_SECRET_KEY")
+BUCKET = os.getenv("AWS_BUCKET_NAME")
+
+INPUT_PREFIX = os.getenv("INPUT_PREFIX", "sales/raw/")
+OUTPUT_PREFIX = os.getenv("OUTPUT_PREFIX", "sales/processed/")
+
+end_date = datetime.utcnow().date() - timedelta(days=1)
+start_date = end_date - timedelta(days=6)
+
+s3 = boto3.client(
+    "s3",
+    aws_access_key_id=AWS_KEY,
+    aws_secret_access_key=AWS_SECRET
+)
+
+all_records = []
+
+current_date = start_date
+
+while current_date <= end_date:
+
+    date_path = current_date.strftime("year=%Y/month=%m/day=%d")
+    file_key = f"{INPUT_PREFIX}{date_path}/sales.json"
+
+    try:
+        response = s3.get_object(
+            Bucket=BUCKET,
+            Key=file_key
+        )
+
+        data = response["Body"].read().decode("utf-8")
+        daily_records = json.loads(data)
+
+        all_records.extend(daily_records)
+
+        print(f"Loaded data for {current_date}")
+
+    except s3.exceptions.NoSuchKey:
+        print(f"No data for {current_date}")
+
+    current_date += timedelta(days=1)
+
+df = pd.DataFrame(all_records)
+
+if df.empty:
+    print("No data found for last 7 days")
+    exit()
+
+df["order_date"] = pd.to_datetime(df["order_timestamp"]).dt.date
+
+df["revenue"] = df["quantity"] * df["price"]
+
+summary = (
+    df.groupby(["order_date", "country"])
+    .agg(
+        total_orders=("order_id", "count"),
+        total_revenue=("revenue", "sum"),
+        avg_order_value=("revenue", "mean")
+    )
+    .reset_index()
+)
+
+buffer = StringIO()
+summary.to_csv(buffer, index=False)
+
+output_key = f"{OUTPUT_PREFIX}weekly_sales_summary.csv"
+
+s3.put_object(
+    Bucket=BUCKET,
+    Key=output_key,
+    Body=buffer.getvalue().encode(),
+    ContentType="text/csv"
+)
+
+print(f"Summary written to s3://{BUCKET}/{output_key}")
