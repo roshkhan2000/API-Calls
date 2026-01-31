@@ -1,0 +1,67 @@
+import os
+import json
+from datetime import datetime, timedelta
+from io import StringIO
+
+import boto3
+import pandas as pd
+from dotenv import load_dotenv
+
+load_dotenv()
+
+aws_access_key = os.getenv("AWS_ACCESS_KEY")
+aws_secret_key = os.getenv("AWS_SECRET_KEY")
+aws_bucket_name = os.getenv("AWS_BUCKET")
+
+raw_prefix = os.getenv("RAW_EVENTS_PREFIX", "events/raw/")
+agg_prefix = os.getenv("AGG_EVENTS_PREFIX", "events/aggregated/")
+
+# Process yesterday's data
+processing_day = datetime.utcnow() - timedelta(days=1)
+partition_path = processing_day.strftime("year=%Y/month=%m/day=%d")
+
+s3_client = boto3.client(
+    "s3",
+    aws_access_key_id=aws_access_key,
+    aws_secret_access_key=aws_secret_key,
+)
+
+raw_key = f"{raw_prefix}{partition_path}/events.jsonl"
+
+response = s3_client.get_object(Bucket=aws_bucket_name, Key=raw_key)
+
+raw_bytes = response["Body"].read()
+lines = raw_bytes.decode("utf-8").splitlines()
+
+records = [json.loads(line) for line in lines if line.strip()]
+
+df = pd.DataFrame(records)
+
+if df.empty:
+    print("No events found for processing_day")
+else:
+    # Expect columns: timestamp, event_type, user_id, event_id
+    df["event_date"] = pd.to_datetime(df["timestamp"]).dt.date
+
+    agg_df = (
+        df.groupby(["event_date", "event_type"])
+        .agg(
+            total_events=("event_id", "count"),
+            unique_users=("user_id", "nunique"),
+        )
+        .reset_index()
+    )
+
+    buffer = StringIO()
+    agg_df.to_csv(buffer, index=False)
+
+    dest_key = f"{agg_prefix}{partition_path}/event_summary.csv"
+
+    s3_client.put_object(
+        Bucket=aws_bucket_name,
+        Key=dest_key,
+        Body=buffer.getvalue().encode("utf-8"),
+        ContentType="text/csv",
+    )
+
+    print(f"Written aggregated data to s3://{aws_bucket_name}/{dest_key}")
