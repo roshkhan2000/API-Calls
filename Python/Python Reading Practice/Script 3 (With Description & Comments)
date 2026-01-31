@@ -3,7 +3,6 @@
 # All records are combined into a Pandas DataFrame, enriched with datetime fields, and aggregated by event date and type to compute total events, unique users, and error counts.
 # The results are written to an in-memory CSV buffer and uploaded back to S3 under a report prefix.
 
-
 # os for interacting with operating system
 # gzip to compress or uncompress files
 # json to convert json string to python objects
