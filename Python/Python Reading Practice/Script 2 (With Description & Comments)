@@ -1,0 +1,4 @@
+# This script loads AWS credentials from environment variables and processes sales data from the last 7 complete days. 
+# It loops over daily S3 partitions, downloads JSON files, and combines them into a single dataset. 
+# The data is converted into a Pandas DataFrame, enriched with calculated fields like revenue and order date, and aggregated by date and country. 
+# Finally, it writes the summary to an in-memory CSV buffer and uploads it back to S3.
