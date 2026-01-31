@@ -1,0 +1,122 @@
+# This script reads AWS credentials from environment variables, then iterates over hourly log files for yesterday.
+# Each file is downloaded from S3, decompressed from GZIP, and each JSON line is converted to a Python dictionary. 
+# All records are combined into a Pandas DataFrame, enriched with datetime fields, and aggregated by event date and type to compute total events, unique users, and error counts.
+# The results are written to an in-memory CSV buffer and uploaded back to S3 under a report prefix.
+
+
+# os for interacting with operating system
+# gzip to compress or uncompress files
+# json to convert json string to python objects
+# datetime for datetime functions
+# io to perform actions for in-memory file objects
+# boto3 to connect to AWS
+# pandas for data transformations
+# dotenv to read and load secret keys and info
+import os
+import gzip
+import json
+from datetime import datetime, timedelta
+from io import BytesIO, StringIO
+
+import boto3
+import pandas as pd
+from dotenv import load_dotenv
+
+# read dotenv file with secret info
+# save respective pieces into python variables including bucket file prefix / paths 
+# define run_date, start_hour, end_hour as a filter to read specific files from bucket 
+# deinfe s3 client to be able to connect and authenticate to AWS
+load_dotenv()
+
+AWS_KEY = os.getenv("AWS_ACCESS_KEY")
+AWS_SECRET = os.getenv("AWS_SECRET_KEY")
+BUCKET = os.getenv("AWS_BUCKET")
+
+LOG_PREFIX = os.getenv("LOG_PREFIX", "logs/raw/")
+REPORT_PREFIX = os.getenv("REPORT_PREFIX", "logs/reports/")
+
+run_date = datetime.utcnow().date() - timedelta(days=1)
+
+start_hour = 0
+end_hour = 23
+
+s3 = boto3.client(
+    "s3",
+    aws_access_key_id=AWS_KEY,
+    aws_secret_access_key=AWS_SECRET
+)
+
+# create an empty list
+# iterate through start_hour and end_hour + 1
+  # create folder paths and file names to read
+# call each file_key and get a response
+# response is then then uncompressed in memory and converted from bytes to string
+# idk whats happening in the line part but does it append each line and converts json string to python object
+# print a particular message when no data is found
+records = []
+
+for hour in range(start_hour, end_hour + 1):
+
+    hour_path = f"date={run_date}/hour={hour:02d}"
+    file_key = f"{LOG_PREFIX}{hour_path}/events.json.gz"
+
+    try:
+        response = s3.get_object(
+            Bucket=BUCKET,
+            Key=file_key
+        )
+
+        compressed = response["Body"].read()
+
+        with gzip.GzipFile(fileobj=BytesIO(compressed)) as f:
+            content = f.read().decode("utf-8")
+
+        lines = content.splitlines()
+
+        for line in lines:
+            if line.strip():
+                records.append(json.loads(line))
+
+        print(f"Processed hour {hour}")
+
+    except s3.exceptions.NoSuchKey:
+        print(f"Missing file for hour {hour}")
+
+# convert list in to a data frame
+# if no data was found then print the below message
+# create event_time from timestamp and event_date from event_time
+# aggregate the data to event_date and event type 
+df = pd.DataFrame(records)
+
+if df.empty:
+    print("No log data found")
+    exit()
+
+df["event_time"] = pd.to_datetime(df["timestamp"])
+df["event_date"] = df["event_time"].dt.date
+
+summary = (
+    df.groupby(["event_date", "event_type"])
+    .agg(
+        total_events=("event_id", "count"),
+        unique_users=("user_id", "nunique"),
+        error_events=("status", lambda x: (x == "error").sum())
+    )
+    .reset_index()
+)
+
+# save in memory file using buffer and define file name
+# load aggregated data into the same bucket under a different file prefix
+buffer = StringIO()
+summary.to_csv(buffer, index=False)
+
+output_key = f"{REPORT_PREFIX}daily_event_report_{run_date}.csv"
+
+s3.put_object(
+    Bucket=BUCKET,
+    Key=output_key,
+    Body=buffer.getvalue().encode(),
+    ContentType="text/csv"
+)
+
+print(f"Report written to s3://{BUCKET}/{output_key}")
