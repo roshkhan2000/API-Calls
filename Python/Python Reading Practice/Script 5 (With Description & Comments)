@@ -1,0 +1,93 @@
+# This script connects to Azure Blob Storage using credentials from environment variables and identifies zipped data files from the previous month.
+# It downloads and extracts Excel files in memory, combines them into a single dataset, and performs date and revenue transformations.
+# Finally, it aggregates the data by month and region and uploads a CSV summary back to Azure.
+
+# os to interact with operating system
+# pandas and datetime for data + datetime transformation
+# io to operate in-memory
+# zipfile to work with zipfiles 
+# BlobServiceClient to connect to Azure blob
+# dotenv to load secret info and keys
+import os
+import pandas as pd
+from datetime import datetime, timedelta
+from io import BytesIO
+from zipfile import ZipFile
+
+from azure.storage.blob import BlobServiceClient
+from dotenv import load_dotenv
+
+# read dot env file and store azure details inc. containers
+# define folder / file path structure in the container
+load_dotenv()
+AZURE_CONN = os.getenv("AZURE_CONNECTION_STRING")
+CONTAINER = os.getenv("AZURE_CONTAINER")
+
+INPUT_PREFIX = os.getenv("INPUT_PREFIX", "monthly_data/raw/")
+OUTPUT_PREFIX = os.getenv("OUTPUT_PREFIX", "monthly_data/summary/")
+
+# define todays date, last month, and first day of the month
+today = datetime.utcnow().date()
+first_day = today.replace(day=1)
+last_month = first_day - timedelta(days=1)
+month_str = last_month.strftime("%Y-%m")
+
+# define client to connect and authenticate to Azure blob
+blob_service = BlobServiceClient.from_connection_string(AZURE_CONN)
+container_client = blob_service.get_container_client(CONTAINER)
+
+# create empy list
+all_dfs = []
+
+# return all blobs in the specific with the specific prefix
+blobs = container_client.list_blobs(name_starts_with=f"{INPUT_PREFIX}{month_str}/")
+
+# for each blob returned, return the info in the blob, download it in memory
+# unzip each file in memory that end with .xlsx, read them as excel and append them to a a list of dataframes
+# if no data found in all_dfs then return 'no data for last month' 
+# exit and close process when done
+for blob in blobs:
+    blob_client = container_client.get_blob_client(blob)
+    stream = BytesIO(blob_client.download_blob().readall())
+    
+    with ZipFile(stream) as z:
+        for file_name in z.namelist():
+            if file_name.endswith(".xlsx"):
+                with z.open(file_name) as f:
+                    df = pd.read_excel(f)
+                    all_dfs.append(df)
+
+if not all_dfs:
+    print("No data for last month")
+    exit()
+
+# concatenate all python objects
+# define order date, month and totalprice
+# aggregate data by month and region
+data = pd.concat(all_dfs, ignore_index=True)
+
+data["order_date"] = pd.to_datetime(data["order_date"])
+data["month"] = data["order_date"].dt.to_period("M")
+data["total_price"] = data["quantity"] * data["unit_price"]
+
+summary = (
+    data.groupby(["month", "region"])
+    .agg(
+        total_orders=("order_id", "count"),
+        total_revenue=("total_price", "sum"),
+        avg_order_value=("total_price", "mean")
+    )
+    .reset_index()
+)
+
+# define files to output that are stored in-memory
+# upload them back to the container in the specified file path 
+# ensure you convert string to bytes before doing so
+output_file = f"{OUTPUT_PREFIX}monthly_summary_{month_str}.csv"
+container_client.upload_blob(
+    name=output_file,
+    data=summary.to_csv(index=False).encode("utf-8"),
+    overwrite=True
+)
+
+print(f"Uploaded monthly summary to {output_file}")
