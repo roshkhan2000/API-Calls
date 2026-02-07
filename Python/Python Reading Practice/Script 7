@@ -1,0 +1,83 @@
+import os
+import pandas as pd
+from datetime import datetime, timedelta
+import json
+
+API_KEY = os.getenv("API_KEY")
+ENVIRONMENT = os.getenv("ENVIRONMENT", "dev")
+
+BASE_PATH = "./data"
+OUTPUT_PATH = "./output"
+
+if not os.path.exists(OUTPUT_PATH):
+    os.makedirs(OUTPUT_PATH)
+
+start_date = datetime.today() - timedelta(days=30)
+end_date = datetime.today()
+
+date_range = pd.date_range(start=start_date, end=end_date)
+
+records = []
+
+for date in date_range:
+    record = {
+        "date": date.strftime("%Y-%m-%d"),
+        "users": int((date.day * 3) % 50 + 20),
+        "transactions": int((date.day * 5) % 100 + 40),
+        "revenue": round((date.day * 7.5) % 500 + 100, 2)
+    }
+    records.append(record)
+
+df = pd.DataFrame(records)
+
+df["date"] = pd.to_datetime(df["date"])
+df["week"] = df["date"].dt.isocalendar().week
+
+weekly_summary = (
+    df.groupby("week")
+      .agg(
+          total_users=("users", "sum"),
+          total_transactions=("transactions", "sum"),
+          total_revenue=("revenue", "sum"),
+          avg_revenue=("revenue", "mean")
+      )
+      .reset_index()
+)
+
+env_config = {
+    "dev": {
+        "storage": "local",
+        "bucket": "dev-data-bucket"
+    },
+    "prod": {
+        "storage": "aws",
+        "bucket": "prod-analytics-bucket"
+    }
+}
+
+config = env_config.get(ENVIRONMENT, env_config["dev"])
+
+metadata = {
+    "generated_at": datetime.utcnow().isoformat(),
+    "environment": ENVIRONMENT,
+    "api_key_present": API_KEY is not None,
+    "record_count": len(df),
+    "config": config
+}
+
+summary_file = os.path.join(OUTPUT_PATH, "weekly_summary.csv")
+meta_file = os.path.join(OUTPUT_PATH, "metadata.json")
+
+weekly_summary.to_csv(summary_file, index=False)
+
+with open(meta_file, "w") as f:
+    json.dump(metadata, f, indent=2)
+
+final_report = {
+    "summary_path": summary_file,
+    "metadata_path": meta_file,
+    "weeks_processed": weekly_summary["week"].nunique(),
+    "total_revenue": round(weekly_summary["total_revenue"].sum(), 2)
+}
+
+print(json.dumps(final_report, indent=2))
